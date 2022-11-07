@@ -16,7 +16,6 @@ contract Marketplace is ReentrancyGuard {
   Counters.Counter private _nftCount;
 
   uint256 public constant VERSION = 20221103001;
-  uint256 public LISTING_FEE = 0.0001 ether;
 
   Fee private DEFAULT_FEE = Fee(0, "default", FeeType.PERCENT, 25, 10, 25, 0, true);
 
@@ -50,7 +49,9 @@ contract Marketplace is ReentrancyGuard {
     uint256 networkfee
   );
 
-  mapping(uint256 => NFT) private _idToNFT;
+  mapping(uint256 => NFT) private _idToNFT; // entire list
+  mapping(address => uint256[]) private _contractList; // entry by ER721 contract
+  mapping(address => uint256[]) private _sellerList; // entry by seller
   struct NFT {
     uint256 nftIndex;
     address nftContract;
@@ -139,7 +140,6 @@ contract Marketplace is ReentrancyGuard {
   // List the NFT on the marketplace
   function listNft(address _nftContract, uint256 _tokenId, uint256 _price, address _token, uint256 _feeIndex, address _originator) public payable nonReentrant {
     require(_price > 0, "Price must be at least 1 wei");
-    require(msg.value == LISTING_FEE, "Not enough ether for listing fee");
 
     IERC721(_nftContract).transferFrom(msg.sender, address(this), _tokenId);
 
@@ -148,6 +148,13 @@ contract Marketplace is ReentrancyGuard {
     _nftCount.increment();
 
     uint nftIndex = _nftCount.current();
+
+    uint256[] storage contractnftindexes =  _contractList[_nftContract];
+    contractnftindexes.push(nftIndex);
+
+    uint256[] storage sellernftindexes =  _sellerList[msg.sender];
+    sellernftindexes.push(nftIndex);
+
 
     _idToNFT[nftIndex] = NFT(
       nftIndex,
@@ -214,7 +221,6 @@ contract Marketplace is ReentrancyGuard {
 
     IERC721(nft.nftContract).transferFrom(address(this), buyer, nft.tokenId);
 
-    _marketOwner.transfer(LISTING_FEE);
     nft.owner = buyer;
     nft.listed = false;
 
@@ -225,7 +231,6 @@ contract Marketplace is ReentrancyGuard {
   // Resell an NFT purchased from the marketplace
   function resellNft(uint256 _nftIndex, uint256 _price, address _originator) public payable nonReentrant {
     require(_price > 0, "Price must be at least 1 wei");
-    require(msg.value == LISTING_FEE, "Not enough ether for listing fee");
 
     NFT storage nft = _idToNFT[_nftIndex];
 
@@ -243,14 +248,13 @@ contract Marketplace is ReentrancyGuard {
 
 
   // read functions
-  function getListingFee() public view returns (uint256) {
-    return LISTING_FEE;
-  }
-
   function getVersion() public pure returns (uint256) {
     return VERSION;
   }
 
+  function getNftCount() public view returns (uint256) {
+    return _nftCount.current();
+  }
    // fees
   function getAllFees() public view returns (Fee[] memory) {
     uint256 tokenCount = _tokenCount.current();
@@ -319,12 +323,25 @@ contract Marketplace is ReentrancyGuard {
     return nfts;
   }
 
-  function getNft(address _nftContract, uint256 _tokenId) public view returns (NFT memory) {
-    uint256 nftCount = _nftCount.current();
-    for (uint256 i = 0; i < nftCount; i++) {
-      NFT memory nft = _idToNFT[i + 1];
+  function getAllNftsBetween(uint256 _start, uint _end) public view returns (NFT[] memory) {
+    uint size = _end - _start;
+    NFT[] memory nfts = new NFT[](size);
+    uint nftsIndex = 0;
+    for (uint i = 0; i < size; i++) {
+        nfts[nftsIndex] = _idToNFT[_start + i + 1];
+        nftsIndex++;
+    }
+    return nfts;
+  }
 
-      if ((nft.nftContract == _nftContract) && (nft.tokenId == _tokenId))
+  function getNft(address _nftContract, uint256 _tokenId) public view returns (NFT memory) {
+    uint256[] storage contractnftindexes =  _contractList[_nftContract];
+
+    uint256 size = contractnftindexes.length;
+    for (uint256 i = 0; i < size; i++) {
+      NFT memory nft = _idToNFT[contractnftindexes[i]];
+
+      if (nft.tokenId == _tokenId)
         return nft;
     }
 
@@ -350,8 +367,6 @@ contract Marketplace is ReentrancyGuard {
     return fullprice;
   }
 
-
-
   function getListedNfts() public view returns (NFT[] memory) {
     uint256 nftCount = _nftCount.current();
     uint256 unsoldNftsCount = nftCount - _nftsSold.current();
@@ -367,40 +382,62 @@ contract Marketplace is ReentrancyGuard {
     return nfts;
   }
 
-  function getMyNfts() public view returns (NFT[] memory) {
-    uint nftCount = _nftCount.current();
-    uint myNftCount = 0;
-    for (uint i = 0; i < nftCount; i++) {
-      if (_idToNFT[i + 1].owner == msg.sender) {
-        myNftCount++;
+  function getListedNftsBetween(uint256 _start, uint _end) public view returns (NFT[] memory) {
+    uint size = _end - _start;
+    uint count = 0;
+
+    for (uint i = 0; i < size; i++) {
+      if (_idToNFT[_start + i + 1].listed) {
+        count++;
       }
     }
 
-    NFT[] memory nfts = new NFT[](myNftCount);
+    NFT[] memory nfts = new NFT[](count);
     uint nftsIndex = 0;
-    for (uint i = 0; i < nftCount; i++) {
-      if (_idToNFT[i + 1].owner == msg.sender) {
-        nfts[nftsIndex] = _idToNFT[i + 1];
+
+   for (uint i = 0; i < size; i++) {
+      if (_idToNFT[_start + i + 1].listed) {
+        nfts[nftsIndex] = _idToNFT[_start + i + 1];
         nftsIndex++;
       }
     }
     return nfts;
   }
 
+
+  function getMyNfts() public view returns (NFT[] memory) {
+    uint256[] storage sellernftindexes =  _sellerList[msg.sender];
+
+    uint256 size = sellernftindexes.length;
+    NFT[] memory nfts = new NFT[](size);
+    uint nftsIndex = 0;
+
+    for (uint256 i = 0; i < size; i++) {
+      NFT memory nft = _idToNFT[sellernftindexes[i]];
+      nfts[nftsIndex] =  nft;
+      nftsIndex++;
+    }
+    return nfts;
+  }
+
   function getMyListedNfts() public view returns (NFT[] memory) {
-    uint nftCount = _nftCount.current();
-    uint myListedNftCount = 0;
-    for (uint i = 0; i < nftCount; i++) {
-      if (_idToNFT[i + 1].seller == msg.sender && _idToNFT[i + 1].listed) {
-        myListedNftCount++;
+    uint256[] storage sellernftindexes =  _sellerList[msg.sender];
+
+    uint256 size = sellernftindexes.length;
+    uint count = 0;
+    for (uint256 i = 0; i < size; i++) {
+      NFT memory nft = _idToNFT[sellernftindexes[i]];
+      if (nft.listed) {
+        count++;
       }
     }
-
-    NFT[] memory nfts = new NFT[](myListedNftCount);
+    NFT[] memory nfts = new NFT[](count);
     uint nftsIndex = 0;
-    for (uint i = 0; i < nftCount; i++) {
-      if (_idToNFT[i + 1].seller == msg.sender && _idToNFT[i + 1].listed) {
-        nfts[nftsIndex] = _idToNFT[i + 1];
+
+    for (uint256 i = 0; i < size; i++) {
+      NFT memory nft = _idToNFT[sellernftindexes[i]];
+      if (nft.listed) {
+        nfts[nftsIndex] =  nft;
         nftsIndex++;
       }
     }
