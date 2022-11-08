@@ -15,9 +15,9 @@ contract Marketplace is ReentrancyGuard {
   Counters.Counter private _nftsSold;
   Counters.Counter private _nftCount;
 
-  uint256 public constant VERSION = 20221103001;
+  uint256 public constant VERSION = 20221108001;
 
-  Fee private DEFAULT_FEE = Fee(0, "default", FeeType.PERCENT, 25, 10, 25, 0, true);
+  Fee private DEFAULT_FEE = Fee(0, "default", FeeType.PERCENT, 125, 50, 125, 0, true);
 
   address payable private _marketOwner;
   address payable private _networkAccount;
